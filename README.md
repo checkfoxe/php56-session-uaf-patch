@@ -145,7 +145,7 @@ To verify worker stability and memory isolation under real-world conditions with
 
 * **Stress Protocol:** 50 consecutive multipart requests with active `PHP_SESSION_UPLOAD_PROGRESS` were routed to the exact same worker PID.
 * **Results:**
-  * Successful requests: **50 / 50 (100%)**
+  * Successful requests: **50 / 50**
   * Worker crashes / SIGSEGV: **0**
   * Worker PID churn / respawns: **0 (the same PID handled all 50 requests)**
   * Observed RSS growth / Memory leak: **No leak detected** (worker resident memory remained steady at ~221 KB baseline)
