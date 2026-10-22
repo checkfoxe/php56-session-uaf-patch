@@ -131,10 +131,92 @@ make test TESTS="ext/session/tests/"
 make install
 ```
 
-### Reproducible Docker Build
+### Reproducible Docker Build (Ubuntu / PHP-FPM)
 
 ```bash
 docker build -t php56-patched -f build/Dockerfile .
+```
+
+### Debian 8 (Jessie) / Apache mod_php Playbook
+
+For legacy systems running Debian 8 (Jessie) with Apache `libapache2-mod-php5`, follow this step-by-step playbook designed to prevent downtime.
+
+#### 1. Mandatory Safety Backup
+Before making any changes, preserve the existing working state:
+```bash
+mkdir -p /root/php5_backup_$(date +%Y%m%d)
+cd /root/php5_backup_$(date +%Y%m%d)
+
+# Record installed package versions
+dpkg -l | grep -E "php5|libapache2-mod-php5" > installed_packages.txt
+
+# Back up the binary module and configs
+cp -a /usr/lib/apache2/modules/libphp5.so ./libphp5.so.orig
+cp -a /etc/php5 ./etc_php5_backup
+cp -a /etc/apache2 ./etc_apache2_backup
+```
+
+#### 2. Build the Patched Debian Packages
+
+**Method A: Isolated Docker Build (Recommended — No compilers on Production)**  
+Build on any machine with Docker using the provided [build/Dockerfile.debian8-modphp](build/Dockerfile.debian8-modphp):
+```bash
+# Build the package inside an isolated Debian 8 container
+docker build -t php5-deb8-builder -f build/Dockerfile.debian8-modphp .
+
+# Extract the built .deb packages to ./dist
+mkdir -p dist
+docker run --rm -v $(pwd)/dist:/output php5-deb8-builder
+```
+Transfer the generated `libapache2-mod-php5_*.deb`, `php5-common_*.deb`, and `php5-cli_*.deb` from `dist/` to the target server.
+
+**Method B: Native Build on Debian 8 Host**
+```bash
+# 1. Enable archive source repositories in /etc/apt/sources.list
+echo "deb-src http://archive.debian.org/debian jessie main" >> /etc/apt/sources.list
+echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
+
+# 2. Install build tools and source
+apt-get update
+apt-get install -y --force-yes build-essential fakeroot dpkg-dev quilt
+apt-get build-dep -y --force-yes php5
+
+mkdir -p /usr/src/php5-build && cd /usr/src/php5-build
+apt-get source php5
+cd php5-5.6.*
+
+# 3. Register the security patch with quilt
+cp /path/to/php-5.6.x-full-cve-2026-109618-109619.patch debian/patches/cve-2026-109618-109619.patch
+echo "cve-2026-109618-109619.patch" >> debian/patches/series
+
+# 4. Compile packages
+dpkg-buildpackage -us -uc -b -nc -j$(nproc)
+```
+
+#### 3. Deployment & Syntax Validation
+```bash
+# Install the updated packages
+dpkg -i libapache2-mod-php5_*.deb php5-common_*.deb php5-cli_*.deb
+
+# CRITICAL: Validate configuration syntax before reloading
+apache2ctl configtest
+# Output MUST be: Syntax OK
+
+# Graceful reload (zero dropped connections)
+service apache2 graceful
+```
+
+Verify status:
+```bash
+tail -n 50 /var/log/apache2/error.log
+curl -s -I http://localhost/
+```
+
+#### 4. Instant 10-Second Rollback Plan
+If any anomaly is detected, revert immediately without downtime:
+```bash
+cp /root/php5_backup_*/libphp5.so.orig /usr/lib/apache2/modules/libphp5.so
+service apache2 graceful
 ```
 
 ---

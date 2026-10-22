@@ -132,12 +132,94 @@ make test TESTS="ext/session/tests/"
 make install
 ```
 
-### Сборка через Docker
+### Сборка через Docker (Ubuntu / PHP-FPM)
 
 В папке `build/` размещён воспроизводимый [Dockerfile](build/Dockerfile):
 
 ```bash
 docker build -t php56-patched -f build/Dockerfile .
+```
+
+### Регламент сборки и обновления для Debian 8 (Jessie) / Apache mod_php
+
+Для legacy-систем на базе Debian 8 (Jessie) с модулем Apache `libapache2-mod-php5` используйте следующий пошаговый регламент, исключающий риск даунтайма.
+
+#### 1. Обязательный бэкап перед началом
+Перед любыми действиями зафиксируйте текущее рабочее состояние:
+```bash
+mkdir -p /root/php5_backup_$(date +%Y%m%d)
+cd /root/php5_backup_$(date +%Y%m%d)
+
+# Сохранение списка текущих пакетов
+dpkg -l | grep -E "php5|libapache2-mod-php5" > installed_packages.txt
+
+# Бэкап рабочего бинарного модуля и конфигов
+cp -a /usr/lib/apache2/modules/libphp5.so ./libphp5.so.orig
+cp -a /etc/php5 ./etc_php5_backup
+cp -a /etc/apache2 ./etc_apache2_backup
+```
+
+#### 2. Сборка пропатченных пакетов Debian
+
+**Способ А: Изолированная сборка через Docker (Рекомендуется — без компиляторов на бою)**  
+Сборка выполняется на любой машине с Docker через [build/Dockerfile.debian8-modphp](build/Dockerfile.debian8-modphp):
+```bash
+# Сборка пакетов внутри изолированного контейнера Debian 8
+docker build -t php5-deb8-builder -f build/Dockerfile.debian8-modphp .
+
+# Выгрузка готовых .deb пакетов в локальную папку ./dist
+mkdir -p dist
+docker run --rm -v $(pwd)/dist:/output php5-deb8-builder
+```
+Полученные пакеты `libapache2-mod-php5_*.deb`, `php5-common_*.deb`, `php5-cli_*.deb` из папки `dist/` переносятся на целевой сервер.
+
+**Способ Б: Сборка непосредственно на сервере Debian 8**
+```bash
+# 1. Подключение архивных репозиториев исходников в /etc/apt/sources.list
+echo "deb-src http://archive.debian.org/debian jessie main" >> /etc/apt/sources.list
+echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
+
+# 2. Установка сборочных утилит и зависимостей
+apt-get update
+apt-get install -y --force-yes build-essential fakeroot dpkg-dev quilt
+apt-get build-dep -y --force-yes php5
+
+mkdir -p /usr/src/php5-build && cd /usr/src/php5-build
+apt-get source php5
+cd php5-5.6.*
+
+# 3. Регистрация патча в системе quilt
+cp /path/to/php-5.6.x-full-cve-2026-109618-109619.patch debian/patches/cve-2026-109618-109619.patch
+echo "cve-2026-109618-109619.patch" >> debian/patches/series
+
+# 4. Компиляция deb-пакетов
+dpkg-buildpackage -us -uc -b -nc -j$(nproc)
+```
+
+#### 3. Безопасная установка и валидация
+```bash
+# Установка собранных пакетов
+dpkg -i libapache2-mod-php5_*.deb php5-common_*.deb php5-cli_*.deb
+
+# КРИТИЧЕСКИ ВАЖНО: Проверка синтаксиса Apache ДО перезагрузки
+apache2ctl configtest
+# В выводе ОБЯЗАТЕЛЬНО должно быть: Syntax OK
+
+# Мягкий перезапуск (без обрыва активных соединений пользователей)
+service apache2 graceful
+```
+
+Проверка статуса:
+```bash
+tail -n 50 /var/log/apache2/error.log
+curl -s -I http://localhost/
+```
+
+#### 4. План мгновенного отката (10 секунд)
+При выявлении любых нештатных ошибок возврат к оригинальному модулю выполняется мгновенно:
+```bash
+cp /root/php5_backup_*/libphp5.so.orig /usr/lib/apache2/modules/libphp5.so
+service apache2 graceful
 ```
 
 ---
@@ -148,7 +230,7 @@ docker build -t php56-patched -f build/Dockerfile .
 
 * **Протокол стресс-теста:** 50 последовательных multipart-запросов с активным `PHP_SESSION_UPLOAD_PROGRESS` направлялись строго в один и тот же рабочий PID процесса.
 * **Результаты:**
-  * Успешных запросов: **50 / 50**
+  * Успешных запросов: **50 / 50 (100%)**
   * Падений процесса / аварийных сбоев (SIGSEGV): **0**
   * Смена / перезапуск PID воркера: **0 (один и тот же PID обработал всю серию)**
   * Наблюдаемый рост RSS / утечка памяти: **не выявлено** (потребление памяти воркера стабильно зафиксировано на baseline ~221 КБ)

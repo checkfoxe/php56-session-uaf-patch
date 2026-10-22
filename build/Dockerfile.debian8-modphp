@@ -1,0 +1,39 @@
+# Dockerfile to build patched libapache2-mod-php5 and php5-cli deb packages on Debian 8 Jessie
+FROM debian:jessie-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Configure EOL Debian 8 archive repositories
+RUN echo "deb http://archive.debian.org/debian jessie main contrib non-free" > /etc/apt/sources.list && \
+    echo "deb-src http://archive.debian.org/debian jessie main contrib non-free" >> /etc/apt/sources.list && \
+    echo "deb http://archive.debian.org/debian-security jessie/updates main contrib non-free" >> /etc/apt/sources.list && \
+    echo "deb-src http://archive.debian.org/debian-security jessie/updates main contrib non-free" >> /etc/apt/sources.list && \
+    echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --force-yes \
+    build-essential \
+    fakeroot \
+    dpkg-dev \
+    quilt \
+    curl \
+    ca-certificates \
+    && apt-get build-dep -y --force-yes php5 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src/build
+
+# Copy security patch into build context
+COPY patches/php-5.6.x-full-cve-2026-109618-109619.patch /usr/src/build/
+
+# Download Debian 8 source, apply patch via quilt, and build binary packages
+RUN apt-get update && apt-get source php5 && \
+    SRC_DIR=$(ls -d php5-5.6.*) && \
+    cd "$SRC_DIR" && \
+    cp /usr/src/build/php-5.6.x-full-cve-2026-109618-109619.patch debian/patches/cve-2026-109618-109619-backport.patch && \
+    echo "cve-2026-109618-109619-backport.patch" >> debian/patches/series && \
+    dpkg-buildpackage -us -uc -b -nc -j$(nproc)
+
+VOLUME /output
+
+CMD ["sh", "-c", "cp /usr/src/build/*.deb /output/ && echo 'Debian 8 packages successfully built and copied to /output'"]
