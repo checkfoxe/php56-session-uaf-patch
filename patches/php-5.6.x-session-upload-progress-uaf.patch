@@ -1,6 +1,6 @@
 --- a/ext/session/session.c
 +++ b/ext/session/session.c
-@@ -97,12 +97,25 @@
+@@ -97,12 +97,25 @@ static inline void php_rinit_session_glo
  	PS(mod_user_is_open) = 0;
  	/* Do NOT init PS(mod_user_names) here! */
  	PS(http_session_vars) = NULL;
@@ -26,7 +26,7 @@
  	if (PS(http_session_vars)) {
  		zval_ptr_dtor(&PS(http_session_vars));
  		PS(http_session_vars) = NULL;
-@@ -2446,6 +2459,7 @@
+@@ -2446,6 +2459,7 @@ static PHP_GINIT_FUNCTION(ps) /* {{{ */
  		ps_globals->mod_user_names.names[i] = NULL;
  	}
  	ps_globals->http_session_vars = NULL;
@@ -34,7 +34,7 @@
  }
  /* }}} */
  
-@@ -2678,6 +2692,9 @@
+@@ -2678,6 +2692,9 @@ static int php_session_rfc1867_callback(
  	switch(event) {
  		case MULTIPART_EVENT_START: {
  			multipart_event_start *data = (multipart_event_start *) event_data;
@@ -44,3 +44,54 @@
  			progress = ecalloc(1, sizeof(php_session_rfc1867_progress));
  			progress->content_length = data->content_length;
  			progress->sname_len  = strlen(PS(session_name));
+@@ -2688,6 +2705,10 @@ static int php_session_rfc1867_callback(
+ 			multipart_event_formdata *data = (multipart_event_formdata *) event_data;
+ 			size_t value_len;
+ 
++			if (!progress) {
++				break;
++			}
++
+ 			if (Z_TYPE(progress->sid) && progress->key.c) {
+ 				break;
+ 			}
+@@ -2721,6 +2742,10 @@ static int php_session_rfc1867_callback(
+ 		case MULTIPART_EVENT_FILE_START: {
+ 			multipart_event_file_start *data = (multipart_event_file_start *) event_data;
+ 
++			if (!progress) {
++				break;
++			}
++
+ 			/* Do nothing when $_POST["PHP_SESSION_UPLOAD_PROGRESS"] is not set
+ 			 * or when we have no session id */
+ 			if (!Z_TYPE(progress->sid) || !progress->key.c) {
+@@ -2785,7 +2810,7 @@ static int php_session_rfc1867_callback(
+ 		case MULTIPART_EVENT_FILE_DATA: {
+ 			multipart_event_file_data *data = (multipart_event_file_data *) event_data;
+ 
+-			if (!Z_TYPE(progress->sid) || !progress->key.c) {
++			if (!progress || !Z_TYPE(progress->sid) || !progress->key.c) {
+ 				break;
+ 			}
+ 
+@@ -2798,7 +2823,7 @@ static int php_session_rfc1867_callback(
+ 		case MULTIPART_EVENT_FILE_END: {
+ 			multipart_event_file_end *data = (multipart_event_file_end *) event_data;
+ 
+-			if (!Z_TYPE(progress->sid) || !progress->key.c) {
++			if (!progress || !Z_TYPE(progress->sid) || !progress->key.c) {
+ 				break;
+ 			}
+ 
+@@ -2816,6 +2841,10 @@ static int php_session_rfc1867_callback(
+ 		case MULTIPART_EVENT_END: {
+ 			multipart_event_end *data = (multipart_event_end *) event_data;
+ 
++			if (!progress) {
++				break;
++			}
++
+ 			if (Z_TYPE(progress->sid) && progress->key.c) {
+ 				if (PS(rfc1867_cleanup)) {
+ 					php_session_rfc1867_cleanup(progress TSRMLS_CC);

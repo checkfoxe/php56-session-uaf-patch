@@ -1,13 +1,12 @@
-# PHP 5.6 Patch for CVE-2026-109619 — Session Upload Progress UAF
+# PHP 5.6 Backport: Session Upload Progress Fix for CVE-2026-109619
 
 English | [Читать на русском](README_RU.md)
 
-This repository provides backported fixes, security analysis, and temporary mitigations for legacy **PHP 5.6.x** environments affected by the critical vulnerabilities disclosed on October 21, 2026:
+This project provides a PHP 5.6 backport addressing the stale `rfc1867_progress` state in the Session Upload Progress mechanism associated with **CVE-2026-109619** (CVSS 9.2).
 
-* **CVE-2026-109619** (CVSS 9.2): Stale state / Use-After-Free during request termination and bailout jumps (specifically via `session.upload_progress`).
-* **CVE-2026-109618** (CVSS 9.2): State corruption and unsafe memory handling following Out-Of-Memory (`zend_bailout`) events across Zend Engine.
+Unlike the emergency mitigation used in upstream EOL packages (which simply disabled the Session Upload Progress callback with `|| true`), this patch preserves the feature and explicitly manages the lifetime of `rfc1867_progress` across request initialization and shutdown.
 
-> **CRITICAL DISCLAIMER:** PHP 5.6 reached official End-of-Life (EOL) in December 2018. Upstream PHP does not provide official patches for 5.6. This repository is an unofficial community backport intended solely for legacy systems that cannot immediately complete a full migration to supported PHP versions.
+> **Important Scope Notice:** This patch specifically targets the confirmed Session Upload Progress vector of CVE-2026-109619. It should not be interpreted as a full backport of all upstream changes associated with CVE-2026-109618/CVE-2026-109619 across the entirety of Zend Engine. For production systems, upgrading to an actively supported PHP release (8.2+) remains strongly recommended.
 
 ---
 
