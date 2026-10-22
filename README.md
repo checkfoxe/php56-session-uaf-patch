@@ -48,9 +48,8 @@ Apply one of our backported C patches to PHP 5.6 source and recompile:
 | **`patches/php-5.6.x-full-cve-2026-109618-109619.patch`** *(Recommended)* | Full Engine Backport | 13 core files: `zend_alloc.c` (`zend_mm_safe_error_ex`), `SAPI.c`, `main.c`, `rfc1867.c`, `session.c` | Production servers needing comprehensive protection against both OOM corruption and stale global state. |
 | **`patches/php-5.6.x-session-upload-progress-uaf.patch`** | Targeted Session Patch | `ext/session/session.c` | Minimal footprint; fixes the specific `session.upload_progress` lifecycle and NULL guards. |
 
-#### Design Advantage in `session.c`
-Upstream minimal emergency patches for EOL versions took the blunt approach of completely neutering or disabling the upload progress callback (`|| 1` / `|| true`).  
-In contrast, our backport preserves the legitimate upload progress functionality while strictly enforcing lifecycle resets (`RINIT`, `RSHUTDOWN`, `GINIT`) and NULL guard checks (`if (!progress) break;`) across all multipart callback events.
+#### Upstream EOL Strategy vs. This Backport
+Upstream EOL mitigations disable `session.upload_progress`, eliminating the affected session upload-progress execution path, while upstream security changes for CVE-2026-109618 address unsafe OOM/bailout handling in the Zend memory manager. This backport preserves `session.upload_progress` by explicitly managing lifecycle states (`RINIT`, `RSHUTDOWN`, `GINIT`) and NULL guard checks (`if (!progress) break;`) while backporting the relevant security changes to PHP 5.6.
 
 ### Tier 3: Configuration Mitigation (No Rebuild / No Root)
 If you cannot recompile or lack root privileges, disable the upload progress mechanism in your server configuration.
