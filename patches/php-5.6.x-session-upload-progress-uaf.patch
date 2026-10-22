@@ -1,0 +1,46 @@
+--- a/ext/session/session.c
++++ b/ext/session/session.c
+@@ -97,12 +97,25 @@
+ 	PS(mod_user_is_open) = 0;
+ 	/* Do NOT init PS(mod_user_names) here! */
+ 	PS(http_session_vars) = NULL;
++	PS(rfc1867_progress) = NULL;
+ }
+ /* }}} */
+ 
+ /* Dispatched by RSHUTDOWN and by php_session_destroy */
+ static inline void php_rshutdown_session_globals(TSRMLS_D) /* {{{ */
+ {
++	/* Clean up lingering rfc1867_progress in case of abort or zend_bailout */
++	if (PS(rfc1867_progress)) {
++		php_session_rfc1867_progress *progress = PS(rfc1867_progress);
++		PS(rfc1867_progress) = NULL;
++		if (progress->data) {
++			zval_ptr_dtor(&progress->data);
++			progress->data = NULL;
++		}
++		zval_dtor(&progress->sid);
++		smart_str_free(&progress->key);
++		efree(progress);
++	}
+ 	if (PS(http_session_vars)) {
+ 		zval_ptr_dtor(&PS(http_session_vars));
+ 		PS(http_session_vars) = NULL;
+@@ -2446,6 +2459,7 @@
+ 		ps_globals->mod_user_names.names[i] = NULL;
+ 	}
+ 	ps_globals->http_session_vars = NULL;
++	ps_globals->rfc1867_progress = NULL;
+ }
+ /* }}} */
+ 
+@@ -2678,6 +2692,9 @@
+ 	switch(event) {
+ 		case MULTIPART_EVENT_START: {
+ 			multipart_event_start *data = (multipart_event_start *) event_data;
++			if (PS(rfc1867_progress)) {
++				PS(rfc1867_progress) = NULL;
++			}
+ 			progress = ecalloc(1, sizeof(php_session_rfc1867_progress));
+ 			progress->content_length = data->content_length;
+ 			progress->sname_len  = strlen(PS(session_name));
