@@ -1,4 +1,4 @@
-# PHP 5.6 Security Advisory: CVE-2026-109619 & CVE-2026-109618 Backport
+# PHP 5.6 Patch for CVE-2026-109619 — Session Upload Progress UAF
 
 English | [Читать на русском](README_RU.md)
 

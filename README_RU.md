@@ -1,4 +1,4 @@
-# Уведомление безопасности PHP 5.6: бэкпорт для CVE-2026-109619 и CVE-2026-109618
+# Патч для PHP 5.6: CVE-2026-109619 — Session Upload Progress UAF
 
 [English version](README.md) | Русский
 
