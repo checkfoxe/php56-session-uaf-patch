@@ -123,17 +123,17 @@ docker build -t php56-patched -f build/Dockerfile .
 ### Контрольные суммы SHA256
 
 ```text
-6c4a6cad16f4f4c235ee1ec4c2da3886e659a3c8695153c4cca95224db0062d6  php-fpm5.6-bin-x86_64.tar.gz
-f1106037dc10352fe1737cbf46a665381b770f9c182880f5c5a8a5f5728f8af1  php5.6-fpm_5.6.40-104+ubuntu24.04.1+deb.sury.org+1_amd64.deb
-ef763df996d2d65993d977a4ec4ce1e99d9108aa5ce616256b69073e9852aca5  php5.6-cli_5.6.40-104+ubuntu24.04.1+deb.sury.org+1_amd64.deb
+688e235dface62e88c14941a50969223d6633d60b779448597bcf4e9f6d16d4c  php-fpm5.6-bin-x86_64.tar.gz
+e9193946a6e94daa51bc29054647328f1939c8ea53fc915840ba1b63e52896a3  php5.6-fpm_5.6.40-104+ubuntu24.04.1+deb.sury.org+1_amd64.deb
+506bd4f97d9de494593e1c0dcb268a84abe69113cd829012a05d9bee563e83ba  php5.6-cli_5.6.40-104+ubuntu24.04.1+deb.sury.org+1_amd64.deb
 a686d6ecb2885a93c1fddae7901d90d153b01cdfee7837e1d16e2b8a965e64bc  php5.6-common_5.6.40-104+ubuntu24.04.1+deb.sury.org+1_amd64.deb
 ```
 
 ### Проверка перед установкой
 ```bash
 sha256sum -c << 'EOF'
-6c4a6cad16f4f4c235ee1ec4c2da3886e659a3c8695153c4cca95224db0062d6  php-fpm5.6-bin-x86_64.tar.gz
-f1106037dc10352fe1737cbf46a665381b770f9c182880f5c5a8a5f5728f8af1  php5.6-fpm_5.6.40-104+ubuntu24.04.1+deb.sury.org+1_amd64.deb
+688e235dface62e88c14941a50969223d6633d60b779448597bcf4e9f6d16d4c  php-fpm5.6-bin-x86_64.tar.gz
+e9193946a6e94daa51bc29054647328f1939c8ea53fc915840ba1b63e52896a3  php5.6-fpm_5.6.40-104+ubuntu24.04.1+deb.sury.org+1_amd64.deb
 EOF
 ```
 
