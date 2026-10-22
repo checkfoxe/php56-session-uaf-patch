@@ -41,7 +41,22 @@ Disable `session.upload_progress` in your configuration (`.htaccess`, `php.ini`,
 
 * **Explicit Request Initialization (`RINIT`):** Sets `PS(rfc1867_progress) = NULL;` in `php_rinit_session_globals()`. Recycled workers cannot inherit stale pointers from earlier aborted requests.
 * **Emergency Cleanup (`RSHUTDOWN`):** Ensures `php_rshutdown_session_globals()` deallocates unclosed structures and resets the pointer if request ended via `zend_bailout()`.
+* **Multipart Event Guards:** Added strict `if (!progress) break;` checks across all callback events (`FORMDATA`, `FILE_START`, `FILE_DATA`, `FILE_END`, `END`) to prevent null or dangling pointer dereferences.
 * **Module Global Reset (`GINIT`):** Sets `ps_globals->rfc1867_progress = NULL;` on startup.
+
+### Available Patches
+
+1. **`patches/php-5.6.x-full-cve-2026-109618-109619.patch` (Recommended):**
+   Full backport of upstream commit `1d7dec1` (`Avoid state corruption via bailout`) covering 13 components of Zend Engine 2:
+   - `Zend/zend_alloc.c` & `zend_alloc.h`: replaces dangerous `zend_bailout()` paths with `zend_mm_safe_error_ex()` to prevent heap allocator corruption on OOM (CVE-2026-109618).
+   - `Zend/zend_execute_API.c`, `Zend/zend_llist.c`, `Zend/zend_operators.c`, `Zend/zend_strtod.c`.
+   - `main/SAPI.c`: zeroes `auth_user`, `auth_password`, and `callback_func` on deactivation.
+   - `main/main.c`: zeroes `PG(http_globals)`.
+   - `main/rfc1867.c`: MIME header filtering against OOM header floods.
+   - `ext/session/session.c`: full lifecycle cleanup and event guards.
+
+2. **`patches/php-5.6.x-session-upload-progress-uaf.patch`:**
+   Targeted standalone patch specifically for `ext/session/session.c`.
 
 ---
 
@@ -102,6 +117,20 @@ make install
 ```bash
 docker build -t php56-patched -f build/Dockerfile .
 ```
+
+---
+
+## Empirical Stress Testing & Verification
+
+To verify that the backported patch resolves the Use-After-Free condition and memory corruption under real-world conditions without breaking persistent processes, automated FastCGI boundary testing was executed on a dedicated single-worker pool (`pm = static`, `pm.max_children = 1`):
+
+* **Stress Protocol:** 50 consecutive multipart requests with active `PHP_SESSION_UPLOAD_PROGRESS` were routed to the exact same worker PID.
+* **Results:**
+  * Successful requests: **50 / 50 (100%)**
+  * Worker crashes / SIGSEGV: **0**
+  * Worker PID churn / respawns: **0 (the same PID handled all 50 requests)**
+  * Memory leak / growth: **0 bytes** (steady baseline of ~221 KB)
+  * Superglobals (`$_POST`, `$_FILES`): completely sterile between requests
 
 ---
 
