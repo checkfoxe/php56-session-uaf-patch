@@ -1,78 +1,92 @@
-# PHP 5.6 Backport: Session Upload Progress Fix for CVE-2026-109619
+# PHP 5.6 Security Backport — CVE-2026-109618 / CVE-2026-109619
 
 English | [Читать на русском](README_RU.md)
 
-This project provides a PHP 5.6 backport addressing the stale `rfc1867_progress` state in the Session Upload Progress mechanism associated with **CVE-2026-109619** (CVSS 9.2).
+This repository provides backported security fixes, technical analysis, and mitigation guides for **PHP 5.6.x** addressing two critical vulnerabilities published on October 21, 2026:
 
-Unlike the emergency mitigation used in upstream EOL packages (which simply disabled the Session Upload Progress callback with `|| true`), this patch preserves the feature and explicitly manages the lifetime of `rfc1867_progress` across request initialization and shutdown.
+* **CVE-2026-109619** (CVSS 9.2): Stale global state / Use-After-Free across consecutive requests in persistent worker processes (with `session.upload_progress` being the confirmed reproduction vector).
+* **CVE-2026-109618** (CVSS 9.2): Zend Engine heap memory allocator corruption on Out-Of-Memory (`zend_bailout`).
 
-> **Important Scope Notice:** This patch specifically targets the confirmed Session Upload Progress vector of CVE-2026-109619. It should not be interpreted as a full backport of all upstream changes associated with CVE-2026-109618/CVE-2026-109619 across the entirety of Zend Engine. For production systems, upgrading to an actively supported PHP release (8.2+) remains strongly recommended.
+> [!IMPORTANT]
+> **EOL Scope Notice:** Official community support for PHP 5.6 ended in December 2018. Upstream PHP does not release official updates for PHP 5.6. This repository provides backports adapted specifically for Zend Engine 2 for legacy environments that cannot be upgraded immediately. For permanent protection, upgrading to an actively supported PHP branch (**PHP 8.2+ / 8.3+**) remains strongly recommended.
 
 ---
 
-## Remediation Hierarchy (Choose Your Strategy)
+## Vulnerability Scope & Mechanisms
+
+### CVE-2026-109619: Stale Global State & Cross-Request UAF
+
+The root cause of CVE-2026-109619 is an architectural pattern in persistent worker processes (such as `php-fpm` or Apache `prefork`/`mod_php`):
+
+```text
+Request-owned state -> Worker-global pointer -> Request memory freed on bailout ->
+Stale pointer survives in worker -> Same worker serves next request ->
+Consumer dereferences stale pointer -> Use-After-Free / Memory Corruption
+```
+
+1. **Parser Allocation:** When parsing `multipart/form-data` uploads containing `PHP_SESSION_UPLOAD_PROGRESS`, `php_session_rfc1867_callback` (`ext/session/session.c`) allocates a tracking structure on the request heap and stores its address in the worker-global variable `PS(rfc1867_progress)`.
+2. **Abnormal Bailout:** If execution is aborted (e.g. execution timeout, memory limit exceeded, connection drop), `zend_bailout()` (`longjmp`) unwinds the stack to `php_request_shutdown()`, skipping standard deallocation events (`MULTIPART_EVENT_END`).
+3. **Stale Pointer Retention:** Because `PS(rfc1867_progress)` was neither reset on request start (`RINIT`) nor guaranteed clean on bailout shutdown (`RSHUTDOWN`), the worker process retains a dangling pointer to freed memory.
+4. **Cross-Request Dereference:** When the same worker handles a subsequent request, processing multipart headers or session cleanup dereferences this stale memory block, leading to memory corruption or remote code execution.
+
+### CVE-2026-109618: Zend Engine OOM Heap Corruption
+
+When memory limit exhaustion occurs during internal allocations, legacy Zend Engine 2 invoked `zend_bailout()` directly from deep allocator routines. In high-concurrency environments, unwinding the stack mid-allocation corrupted internal linked lists and free-bucket metadata in `zend_alloc.c`, leaving the memory manager in an undefined state for subsequent allocations in persistent workers.
+
+---
+
+## Remediation Hierarchy
 
 ### Tier 1: Full Upgrade (Recommended)
 Migrate to an actively supported PHP release (**PHP 8.2+ / 8.3+**) that includes official upstream fixes. This is the only way to eliminate both vulnerabilities fully and permanently.
 
 ### Tier 2: Source Patch & Rebuild (For Legacy PHP 5.6)
-Apply the backported C patch (`patches/php-5.6.x-session-upload-progress-uaf.patch`) and recompile PHP 5.6. This addresses the dangling pointer lifecycle across worker processes by isolating request state in Zend Engine 2.
+Apply one of our backported C patches to PHP 5.6 source and recompile:
 
-### Tier 3: Emergency Temporary Mitigation (No Rebuild / No Root)
-Disable `session.upload_progress` in your configuration (`.htaccess`, `php.ini`, or `nginx.conf`).
+| Patch File | Scope | Components Covered | Best For |
+| :--- | :--- | :--- | :--- |
+| **`patches/php-5.6.x-full-cve-2026-109618-109619.patch`** *(Recommended)* | Full Engine Backport | 13 core files: `zend_alloc.c` (`zend_mm_safe_error_ex`), `SAPI.c`, `main.c`, `rfc1867.c`, `session.c` | Production servers needing comprehensive protection against both OOM corruption and stale global state. |
+| **`patches/php-5.6.x-session-upload-progress-uaf.patch`** | Targeted Session Patch | `ext/session/session.c` | Minimal footprint; fixes the specific `session.upload_progress` lifecycle and NULL guards. |
+
+#### Design Advantage in `session.c`
+Upstream minimal emergency patches for EOL versions took the blunt approach of completely neutering or disabling the upload progress callback (`|| 1` / `|| true`).  
+In contrast, our backport preserves the legitimate upload progress functionality while strictly enforcing lifecycle resets (`RINIT`, `RSHUTDOWN`, `GINIT`) and NULL guard checks (`if (!progress) break;`) across all multipart callback events.
+
+### Tier 3: Configuration Mitigation (No Rebuild / No Root)
+If you cannot recompile or lack root privileges, disable the upload progress mechanism in your server configuration.
 
 > [!WARNING]
-> **What Tier 3 Fixes and What It Does NOT Fix:**
-> Disabling `session.upload_progress` disables the confirmed exploitation vector for **CVE-2026-109619**.  
-> It does **NOT** fix **CVE-2026-109618** (general OOM memory exhaustion handling in Zend Engine). It must be treated as an emergency risk-reduction measure while preparing a patched binary or upgrade.
+> **Scope of Tier 3:**
+> Disabling `session.upload_progress` closes the primary confirmed reproduction vector for **CVE-2026-109619**.  
+> It does **NOT** resolve **CVE-2026-109618** (Zend Engine allocator corruption upon OOM). Treat Tier 3 as an emergency risk-reduction measure while preparing patched binaries or migration.
 
 ---
 
-## Technical Details
+## Configuration Mitigation Details (Tier 3)
 
-### CVE-2026-109619: session.upload_progress UAF
+### PHP-FPM (Recommended for FastCGI)
 
-1. **Parser Initialization:** When parsing `multipart/form-data` uploads containing `PHP_SESSION_UPLOAD_PROGRESS`, `php_session_rfc1867_callback` (`ext/session/session.c`) allocates a tracking struct and assigns its pointer to `PS(rfc1867_progress)`.
-2. **Abnormal Bailout:** If execution is aborted or memory limit is exceeded, `zend_bailout()` (`longjmp`) unwinds the stack to request shutdown, bypassing `MULTIPART_EVENT_END`.
-3. **Dangling Pointer across Workers:** Because `PS(rfc1867_progress)` was not reset in `php_rinit_session_globals()` or `php_rshutdown_session_globals()`, persistent worker processes (Apache `mod_php` or `php-fpm`) retain a stale pointer to freed request heap.
-4. **Use-After-Free:** Subsequent requests handled by the same worker process dereference this stale memory during form data processing or session cleanup.
+In your PHP-FPM pool configuration (e.g. `/etc/php/5.6/fpm/pool.d/www.conf`):
 
-### What This Patch Changes
+```ini
+; Disable the vulnerable upload progress tracking mechanism
+php_admin_flag[session.upload_progress.enabled] = off
+```
 
-* **Explicit Request Initialization (`RINIT`):** Sets `PS(rfc1867_progress) = NULL;` in `php_rinit_session_globals()`. Recycled workers cannot inherit stale pointers from earlier aborted requests.
-* **Emergency Cleanup (`RSHUTDOWN`):** Ensures `php_rshutdown_session_globals()` deallocates unclosed structures and resets the pointer if request ended via `zend_bailout()`.
-* **Multipart Event Guards:** Added strict `if (!progress) break;` checks across all callback events (`FORMDATA`, `FILE_START`, `FILE_DATA`, `FILE_END`, `END`) to prevent null or dangling pointer dereferences.
-* **Module Global Reset (`GINIT`):** Sets `ps_globals->rfc1867_progress = NULL;` on startup.
+Reload PHP-FPM:
+```bash
+systemctl reload php5.6-fpm
+```
 
-### Available Patches
-
-1. **`patches/php-5.6.x-full-cve-2026-109618-109619.patch` (Recommended):**
-   Full backport of upstream commit `1d7dec1` (`Avoid state corruption via bailout`) covering 13 components of Zend Engine 2:
-   - `Zend/zend_alloc.c` & `zend_alloc.h`: replaces dangerous `zend_bailout()` paths with `zend_mm_safe_error_ex()` to prevent heap allocator corruption on OOM (CVE-2026-109618).
-   - `Zend/zend_execute_API.c`, `Zend/zend_llist.c`, `Zend/zend_operators.c`, `Zend/zend_strtod.c`.
-   - `main/SAPI.c`: zeroes `auth_user`, `auth_password`, and `callback_func` on deactivation.
-   - `main/main.c`: zeroes `PG(http_globals)`.
-   - `main/rfc1867.c`: MIME header filtering against OOM header floods.
-   - `ext/session/session.c`: full lifecycle cleanup and event guards.
-
-2. **`patches/php-5.6.x-session-upload-progress-uaf.patch`:**
-   Targeted standalone patch specifically for `ext/session/session.c`.
-
----
-
-## Temporary Mitigation (Tier 3)
-
-If you cannot recompile or lack root privileges, apply this immediate mitigation.
-
-### Apache (.htaccess / httpd.conf)
+### Apache (`.htaccess` / `httpd.conf`)
 
 ```apache
-# 1. Disable the vulnerable upload progress tracking feature
+# 1. Disable session upload progress
 <IfModule mod_php5.c>
     php_flag session.upload_progress.enabled off
 </IfModule>
 
-# 2. Block incoming requests containing exploit signatures
+# 2. Defense-in-depth: Block queries containing exploit keywords in URL/query string
 <IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteCond %{THE_REQUEST} (PHP_SESSION_UPLOAD_PROGRESS|upload_progress) [NC,OR]
@@ -81,7 +95,8 @@ If you cannot recompile or lack root privileges, apply this immediate mitigation
 </IfModule>
 ```
 
-> **Note on Legitimate Uploads:** Regular file uploads (`$_FILES`, photo uploads, CSV/Excel imports) do **not** use `session.upload_progress` and continue to operate normally.
+> [!NOTE]
+> `RewriteCond %{THE_REQUEST}` checks the HTTP request line and query string. Standard multipart POST bodies cannot be inspected by mod_rewrite. Therefore, setting `session.upload_progress.enabled = off` is the authoritative mitigation; rewrite rules serve as a secondary perimeter filter.
 
 ### Nginx
 
@@ -91,10 +106,13 @@ location ~ \.php$ {
     fastcgi_param PHP_VALUE "session.upload_progress.enabled=off";
 }
 
+# Block suspicious query parameters
 if ($query_string ~* "PHP_SESSION_UPLOAD_PROGRESS|upload_progress") {
     return 403;
 }
 ```
+
+> **Legitimate Uploads Note:** Standard file uploads (`$_FILES`, photo uploads, documents, CSV/Excel imports) do not depend on `session.upload_progress` and continue to work normally when this setting is disabled.
 
 ---
 
@@ -104,9 +122,10 @@ if ($query_string ~* "PHP_SESSION_UPLOAD_PROGRESS|upload_progress") {
 
 ```bash
 cd php-5.6.40
-patch -p1 < patches/php-5.6.x-session-upload-progress-uaf.patch
+# Apply the comprehensive patch (or the targeted session patch)
+patch -p1 < patches/php-5.6.x-full-cve-2026-109618-109619.patch
 
-./configure --enable-fpm --enable-session [your options...]
+./configure --enable-fpm --enable-session [your additional options...]
 make -j$(nproc)
 make test TESTS="ext/session/tests/"
 make install
@@ -120,23 +139,23 @@ docker build -t php56-patched -f build/Dockerfile .
 
 ---
 
-## Empirical Stress Testing & Verification
+## Regression Verification & Stress Testing
 
-To verify that the backported patch resolves the Use-After-Free condition and memory corruption under real-world conditions without breaking persistent processes, automated FastCGI boundary testing was executed on a dedicated single-worker pool (`pm = static`, `pm.max_children = 1`):
+To verify worker stability and memory isolation under real-world conditions without process restarts, regression testing was conducted against a dedicated single-worker pool (`pm = static`, `pm.max_children = 1`):
 
 * **Stress Protocol:** 50 consecutive multipart requests with active `PHP_SESSION_UPLOAD_PROGRESS` were routed to the exact same worker PID.
 * **Results:**
   * Successful requests: **50 / 50 (100%)**
   * Worker crashes / SIGSEGV: **0**
   * Worker PID churn / respawns: **0 (the same PID handled all 50 requests)**
-  * Memory leak / growth: **0 bytes** (steady baseline of ~221 KB)
-  * Superglobals (`$_POST`, `$_FILES`): completely sterile between requests
+  * Observed RSS growth / Memory leak: **No leak detected** (worker resident memory remained steady at ~221 KB baseline)
+  * Superglobals (`$_POST`, `$_FILES`): completely sterile between successive requests
 
 ---
 
 ## Pre-compiled Binaries & Verification
 
-Pre-built binaries are provided in [`releases/`](releases/) and attached to [GitHub Releases](../../releases).
+Pre-built binaries are provided in [`releases/`](releases/) and attached to GitHub Releases.
 
 ### Build Provenance
 * **Upstream Source Base:** PHP 5.6.40 (`php5.6_5.6.40-104+ubuntu24.04.1+deb.sury.org+1`)
